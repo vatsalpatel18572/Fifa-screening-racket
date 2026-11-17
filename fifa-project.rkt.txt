@@ -1,0 +1,218 @@
+#lang racket
+(struct user (username password type saved) #:mutable #:transparent)
+(struct listing (id teams date time venue cost owner status) #:mutable #:transparent)
+(define all-users '())
+(define all-listings '())
+(define current-user #f)
+(define id-counter 0)
+(define find-user
+  (λ (username)
+    (findf (λ (u) (string=? (user-username u) username))
+           all-users)))
+(define create-account
+  (λ (username password type)
+    (cond
+      [(find-user username)
+       (printf "Username already taken.\n")
+       #f]
+      [(not (member type '("fan" "venue")))
+       (printf "Type must be fan or venue.\n")
+       #f]
+      [else
+       (define new-user (user username password type '()))
+       (set! all-users (cons new-user all-users))
+       new-user])))
+(define login
+  (λ (username password)
+    (define u (find-user username))
+    (cond
+      [(and u (string=? (user-password u) password)) u]
+      [else #f])))
+(define next-id
+  (λ ()
+    (set! id-counter (+ id-counter 1))
+    id-counter))
+(define find-listing
+  (λ (id)
+    (findf (λ (l) (= (listing-id l) id))
+           all-listings)))
+(define create-listing
+  (λ (teams date time venue cost owner)
+    (define new-listing (listing (next-id) teams date time venue cost owner "active"))
+    (set! all-listings (cons new-listing all-listings))
+    new-listing))
+(define edit-listing
+  (λ (id requester field new-value)
+    (define l (find-listing id))
+    (cond
+      [(not l) "no such listing"]
+      [(not (string=? (listing-owner l) requester))
+       "not allowed: u can only edit your own listings"]
+      [(string=? field "teams") (set-listing-teams! l new-value) l]
+      [(string=? field "date")  (set-listing-date! l new-value) l]
+      [(string=? field "time")  (set-listing-time! l new-value) l]
+      [(string=? field "venue") (set-listing-venue! l new-value) l]
+      [(string=? field "cost")  (set-listing-cost! l (string->number new-value)) l]
+      [else "unknown field"])))
+(define set-status
+  (λ (id requester new-status)
+    (define l (find-listing id))
+    (cond
+      [(and l (string=? (listing-owner l) requester))
+       (set-listing-status! l new-status)
+       l]
+      [else "not allowed: u can only edit your own listings"])))
+(define search-listings
+  (λ (term)
+    (filter (λ (l)
+              (or (string-contains? (string-downcase (listing-teams l)) (string-downcase term))
+                  (string-contains? (string-downcase (listing-venue l)) (string-downcase term))))
+            all-listings)))
+(define count-team
+  (λ (team lst)
+    (cond
+      [(empty? lst) 0]
+      [(string-contains? (listing-teams (first lst)) team)
+       (+ 1 (count-team team (rest lst)))]
+      [else (count-team team (rest lst))])))
+(define add-to-selected
+  (λ (fan id)
+    (set-user-saved! fan (cons id (user-saved fan)))
+    fan))
+(define view-selected
+  (λ (fan)
+    (map (λ (id) (find-listing id))
+         (user-saved fan))))
+(define remove-from-selected
+  (λ (fan id)
+    (set-user-saved! fan (remove id (user-saved fan)))
+    fan))
+(define puch
+  (λ (prompt)
+    (display prompt)
+    (read-line)))
+(define show-listing
+  (λ (l)
+    (display (string-append
+              " [" (number->string (listing-id l)) "] "
+              (listing-teams l) " | "
+              (listing-date l) " " (listing-time l) " | "
+              (listing-venue l) " | £"
+              (number->string (listing-cost l)) " | owner:"
+              (listing-owner l) " | "
+              (listing-status l)))
+    (newline)))
+(define show-listings
+  (λ (lst)
+    (cond
+      [(empty? lst) (printf "Nothing to show.\n")]
+      [else (for ([l lst]) (show-listing l))])))
+(define fan-menu
+  (λ ()
+    (display (string-append "\n--- FAN: " (user-username current-user) " ---\n"))
+    (printf "1 Search matches\n")
+    (printf "2 Add match to selected\n")
+    (printf "3 View my selected\n")
+    (printf "4 Remove from selected\n")
+    (printf "5 Log out\n")
+    (define choice (puch "Choose (1-5): "))
+    (cond
+      [(string=? choice "1")
+       (define term (puch "Search by team or venue: "))
+       (show-listings (search-listings term))
+       (display (string-append (number->string (length (search-listings term))) " match(es) found.\n"))
+       (fan-menu)]
+      [(string=? choice "2")
+       (define id (string->number (puch "Match id to add: ")))
+       (add-to-selected current-user id)
+       (printf "Added!\n")
+       (fan-menu)]
+      [(string=? choice "3")
+       (show-listings (view-selected current-user))
+       (fan-menu)]
+      [(string=? choice "4")
+       (define id (string->number (puch "Match id to remove: ")))
+       (remove-from-selected current-user id)
+       (printf "Removed!\n")
+       (fan-menu)]
+      [(string=? choice "5")
+       (set! current-user #f)
+       (printf "Logged out.\n")]
+      [else (printf "Invalid choice.\n") (fan-menu)])))
+(define venue-menu
+  (λ ()
+    (display (string-append "\n--- VENUE: " (user-username current-user) " ---\n"))
+    (printf "1 Post a match\n")
+    (printf "2 Edit my match\n")
+    (printf "3 Cancel / fully booked\n")
+    (printf "4 View all matches\n")
+    (printf "5 Log out\n")
+    (define choice (puch "Choose (1-5): "))
+    (cond
+      [(string=? choice "1")
+       (define tm (puch "Teams: "))
+       (define dt (puch "Date: "))
+       (define ti (puch "Time: "))
+       (define vn (puch "Venue: "))
+       (define ct (string->number (puch "Cost: ")))
+       (create-listing tm dt ti vn ct (user-username current-user))
+       (printf "Match posted!\n")
+       (venue-menu)]
+      [(string=? choice "2")
+       (define id (string->number (puch "Match id to edit: ")))
+       (define field (puch "Field (teams/date/time/venue/cost): "))
+       (define val (puch "New value: "))
+       (display (edit-listing id (user-username current-user) field val))
+       (newline)
+       (venue-menu)]
+      [(string=? choice "3")
+       (define id (string->number (puch "Match id: ")))
+       (define st (puch "New status (cancelled/fully booked): "))
+       (define result (set-status id (user-username current-user) st))
+(if (listing? result)
+    (show-listing result)
+    (begin (display result) (newline)))
+       (venue-menu)]
+      [(string=? choice "4")
+       (show-listings all-listings)
+       (venue-menu)]
+      [(string=? choice "5")
+       (set! current-user #f)
+       (printf "Logged out.\n")]
+      [else (printf "Invalid choice.\n") (venue-menu)])))
+(define menu
+  (λ ()
+    (printf "\n===== FIFA FAN PLATFORM =====\n")
+    (printf "1 Create account\n")
+    (printf "2 Log in\n")
+    (printf "3 View all matches\n")
+    (printf "4 Quit\n")
+    (define choice (puch "Choose (1-4): "))
+    (cond
+      [(string=? choice "1")
+       (define un (puch "Username: "))
+       (define pw (puch "Password: "))
+       (define ty (puch "Type (fan/venue): "))
+       (cond
+         [(create-account un pw ty) (printf "Account created!\n")]
+         [else (void)])
+       (menu)]
+      [(string=? choice "2")
+       (define un (puch "Username: "))
+       (define pw (puch "Password: "))
+       (define u (login un pw))
+       (cond
+         [(not u) (printf "Wrong username or password.\n") (menu)]
+         [else
+          (set! current-user u)
+          (cond
+            [(string=? (user-type u) "venue") (venue-menu)]
+            [else (fan-menu)])
+          (menu)])]
+      [(string=? choice "3")
+       (show-listings all-listings)
+       (menu)]
+      [(string=? choice "4")
+       (printf "Thank you, bye!\n")]
+      [else (printf "Invalid choice.\n") (menu)])))
+(menu)
